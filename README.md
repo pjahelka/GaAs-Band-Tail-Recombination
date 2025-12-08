@@ -1,0 +1,1 @@
+Mathematica notebook for calculating radiative recombination in a GaAs solar cell with band tails in a heavily doped emitter. Contents may be viewed with the free [Wolfram Player](https://www.wolfram.com/player/).
