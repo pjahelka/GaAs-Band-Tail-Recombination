@@ -1,0 +1,152 @@
+In[1]:= Needs["NumericalCalculus`"]
+Physical Constants and Parameters
+Length units are cm, mass is gram, time is second, energy is eV, current is mA
+Constants
+In[1]:= c= 3 10^10;(*speed of light*)
+h= 4.14 10^-15;(*Planck constant, eVs*)
+kB = 8.62 10^-5;(*Boltzmann constant, eV/K*)
+T = 300;
+kBT = kB*T;
+q=1.602 10^-16;(*fundamental charge, mC*)
+GaAs properties
+Take convention that valence band edge energy is E=0
+In[7]:= cbb=1.3 10^-10;(*GaAs radiative recombination coefficient*)
+ni=2 10^6;(*GaAs intrinsic carrier concentration*)
+p\[LetterSpace]emit=7.0 10^19;(*Emitter doping density*)
+eu=1.0 10^-3*(12+6*p\[LetterSpace]emit/10^19)(*Linear fit to Urbach Energy vs doping*)
+nv=9.0 10^18; (*valence band density of states*)
+nc=4.7 10^17; (*conduction band density of states*)
+n=3.5 (*Band edge index of refraction*);
+eg=1.42;(*unperturbed bandgap*)
+eg\[LetterSpace]emit=eg-1.6 10^-8 p\[LetterSpace]emit^(1/3)(*Bandgap narrowing of the emitter*)
+\[Alpha]\[LetterSpace]bandgap=1000.0;(*Absorption at the bandgap below which is band tails. Used for scaling the absorption calculation*)
+Dn=35+28*Log[p\[LetterSpace]emit/10^19]; (*Electron diffusion coefficient, important if using surface recombination*)
+srv=  5 10^7;(*Electron surface recombination velocity*)
+Out[10]= 0.054
+Out[15]= 1.35406
+Fermi-Dirac and Bose-Einstein Distributions
+In[19]:= fd[e_?NumericQ,\[Mu]_?NumericQ]:=1/(Exp[(e-\[Mu])/kBT]+1)
+
+be[e_?NumericQ,\[Mu]_?NumericQ]:=1/(Exp[(e-\[Mu])/kBT]-1)
+Find the Hole Fermi level and equilibrium electron concentration
+In[21]:= p[efp_?NumericQ]:=nv 2/Sqrt[Pi] NIntegrate[Sqrt[-e/kBT](1-fd[e,efp])/kBT,{e,-Infinity,0}]
+In[22]:= efp=FindRoot[p[x]==p\[LetterSpace]emit,{x,0}, PrecisionGoal->4][[1,2]]
+np0=nc Exp[-(eg\[LetterSpace]emit-efp)/kBT]
+During evaluation of In[22]:= FindRoot::lstol: The line search decreased the step size to within tolerance specified by AccuracyGoal and PrecisionGoal but was unable to find a sufficient decrease in the merit function. You may need more than MachinePrecision digits of working precision to meet these tolerances.
+Out[22]= -0.117869
+Out[23]= 8.96284*10^-8
+Device geometry
+In[24]:= We=200.0 10^-7;(*Emitter Width*)
+Wd=200.0 10^-7;(*Depletion Width*)
+Lp=10.0 10^-4;(*Base Width*)
+Calculate the electron QFL and QFL splitting
+In[27]:= Ln=1.7 (10^-4) ((p\[LetterSpace]emit/10^19)^-0.4)(*electron diffusion length, https://doi.org/10.1063/1.109997*)
+Out[27]= 0.0000780566
+In[28]:= n\[LetterSpace]edge[v__?NumericQ]:=nc*Exp[-(eg\[LetterSpace]emit-(efp+v))/kBT];(*electron density at edge of depletion*)
+n\[LetterSpace]emit[x__?NumericQ,v__?NumericQ]:=(2 E^(We/Ln) (Dn np0 Cosh[We/Ln]+Ln np0 srv Sinh[We/Ln]-(np0-n\[LetterSpace]edge[v]) (Dn Cosh[x/Ln]+Ln srv Sinh[x/Ln])))/(Dn-Ln srv+E^((2 We)/Ln) (Dn+Ln srv));(*Analytic solution of diffusion equation*)
+efn[x__?NumericQ,v__?NumericQ]:=kBT*Log[n\[LetterSpace]emit[x,v]/nc]+eg\[LetterSpace]emit;
+j\[LetterSpace]surf[v__?NumericQ]:=q*Dn*((-np0+n\[LetterSpace]edge[v]) srv)/(Dn Cosh[We/Ln]+Ln srv Sinh[We/Ln]);
+\[CapitalDelta]\[Mu][x__?NumericQ,v__?NumericQ]:=efn[x,v]-efp;
+Simulation settings
+In[33]:= dv=0.001;(*voltage resolution for i-v calculations*)
+vmax=1.2;
+vmin=-0.1;
+jl=-30; (*Photocurrent. Adopt convention that forward bias is positive diode current*)
+psun = 100;(*AM1.5G*)
+e0=0;(*grid settings for pre-computing absorption coefficient*)
+emax=eg\[LetterSpace]emit+0.3;
+de=0.005;
+\[CapitalDelta]\[Mu]0=0;
+\[CapitalDelta]\[Mu]max=emax;
+d\[CapitalDelta]\[Mu]=0.005;
+Helper Functions
+In[44]:= calc\[LetterSpace]pmax[j_]:= NMaximize[{-x*j[x],x>=vmin, x<=vmax},x,PrecisionGoal->4]
+calc\[LetterSpace]eff[j_]:=calc\[LetterSpace]pmax[j]/psun
+calc\[LetterSpace]jsc[j_]:=j[0]
+calc\[LetterSpace]voc[j_]:=FindRoot[j[x],{x,0.5*(vmin+vmax)}]
+calc\[LetterSpace]ff[j_]:=calc\[LetterSpace]pmax[j]/(calc\[LetterSpace]jsc[j]*calc\[LetterSpace]voc[j])
+calc\[LetterSpace]ideality[j_,v_]:=kBT^-1 ((Log[j[v+dv]]-Log[j[v]])/dv)^-1
+calc\[LetterSpace]pv[j_]:=Module[{cell\[LetterSpace]pmax,cell\[LetterSpace]eff,cell\[LetterSpace]jsc,cell\[LetterSpace]voc,cell\[LetterSpace]ff,cell\[LetterSpace]vmpp,cell\[LetterSpace]jmpp,cell\[LetterSpace]ideal,pmax, vmpp, jmpp, eff, jsc, voc, ff, ideal},
+cell\[LetterSpace]pmax=calc\[LetterSpace]pmax[j];
+cell\[LetterSpace]vmpp=cell\[LetterSpace]pmax[[2,1,2]];
+cell\[LetterSpace]pmax=cell\[LetterSpace]pmax[[1]];
+cell\[LetterSpace]jmpp = j[cell\[LetterSpace]vmpp];
+cell\[LetterSpace]eff=cell\[LetterSpace]pmax/psun;
+cell\[LetterSpace]jsc=-calc\[LetterSpace]jsc[j];
+cell\[LetterSpace]voc=calc\[LetterSpace]voc[j][[1,2]];
+cell\[LetterSpace]ff=cell\[LetterSpace]pmax/(cell\[LetterSpace]jsc*cell\[LetterSpace]voc);
+Return[<|
+"pmax"->cell\[LetterSpace]pmax,
+"vmpp"->cell\[LetterSpace]vmpp,
+"jmpp"->cell\[LetterSpace]jmpp,
+"eff"->cell\[LetterSpace]eff,
+"jsc"->cell\[LetterSpace]jsc,
+"voc"->cell\[LetterSpace]voc,
+"ff"->cell\[LetterSpace]ff|>]]
+Depletion and Base Current
+In[51]:= jdb\[LetterSpace]dark[v__?NumericQ]:=Piecewise[{{0,v==0}},q cbb ni^2 (Wd (Exp[v/kBT]-1)-Lp+Lp kBT/v (Exp[v/kBT]-1))]
+In[52]:= jdb\[LetterSpace]light[v__?NumericQ]:=jl+jdb\[LetterSpace]dark[v]
+Reproduce a good GaAs cell photovoltaic parameters
+In[53]:= good\[LetterSpace]pv=calc\[LetterSpace]pv[jdb\[LetterSpace]light]
+calc\[LetterSpace]ideality[jdb\[LetterSpace]dark,good\[LetterSpace]pv["vmpp"]]
+
+Out[53]= <|pmax->30.1315,vmpp->1.02996,jmpp->-29.2551,eff->0.301315,jsc->30,voc->1.1268,ff->0.891363|>
+Out[54]= 1.01416
+Emitter Current
+Integrand for calculating the Urbach absorption. Have already implicitly used Dirac function to integrate ec.
+In[55]:= \[Alpha]\[LetterSpace]integrand[ev_?NumericQ,\[CapitalDelta]\[Mu]_?NumericQ,e_?NumericQ]:=Re[Sqrt[-ev]]Exp[(ev+e)/eu](fd[ev,efp]-fd[ev+e,efp+\[CapitalDelta]\[Mu]])
+In[56]:= \[Alpha]\[LetterSpace]factor=\[Alpha]\[LetterSpace]bandgap/NIntegrate[\[Alpha]\[LetterSpace]integrand[ev,0,eg\[LetterSpace]emit],{ev,-Infinity,0}];
+In[57]:= \[Alpha][e_?NumericQ,\[CapitalDelta]\[Mu]_?NumericQ]:=Piecewise[{
+{\[Alpha]\[LetterSpace]factor *NIntegrate[\[Alpha]\[LetterSpace]integrand[ev,\[CapitalDelta]\[Mu],e],{ev,-Infinity,0},PrecisionGoal->4,AccuracyGoal->4,MaxRecursion->20,Method->"LocalAdaptive"],
+e<=eg\[LetterSpace]emit},
+{\[Alpha]\[LetterSpace]bandgap,
+e>=eg\[LetterSpace]emit}
+}]
+Pre compute absorption spectra and turn into interpolating function
+In[58]:= (*\[Alpha]\[LetterSpace]table=Flatten[Parallelize[Table[{{e,\[CapitalDelta]\[Mu]},\[Alpha][e,\[CapitalDelta]\[Mu]]},{\[CapitalDelta]\[Mu],\[CapitalDelta]\[Mu]0,\[CapitalDelta]\[Mu]max,d\[CapitalDelta]\[Mu]},{e,e0,emax,de}]],1];
+\[Alpha]\[LetterSpace]interpf=Interpolation[\[Alpha]\[LetterSpace]table,InterpolationOrder->2];*)
+\[Alpha]\[LetterSpace]interp[e_?NumericQ,\[CapitalDelta]\[Mu]_?NumericQ]:=\[Alpha]\[LetterSpace]interpf[e,\[CapitalDelta]\[Mu]];
+Black body photon flux
+In[59]:= jbb[e_?NumericQ,\[CapitalDelta]\[Mu]_?NumericQ]:=(8Pi n^2 c)/(h c)^3 e^2*be[e,\[CapitalDelta]\[Mu]];
+In[60]:= current\[LetterSpace]integrand[e_?NumericQ,\[CapitalDelta]\[Mu]_?NumericQ]:=\[Alpha]\[LetterSpace]interp[e,\[CapitalDelta]\[Mu]]*jbb[e,\[CapitalDelta]\[Mu]]
+In[61]:= emitter\[LetterSpace]current\[LetterSpace]density[\[CapitalDelta]\[Mu]_?NumericQ]:=q*NIntegrate[current\[LetterSpace]integrand[e,\[CapitalDelta]\[Mu]],{e,0,emax},PrecisionGoal->3,MaxRecursion->20,Method->"LocalAdaptive"]
+In[62]:= emitter\[LetterSpace]current[v_?NumericQ]:=NIntegrate[emitter\[LetterSpace]current\[LetterSpace]density[\[CapitalDelta]\[Mu][x,v]],{x,0,We},PrecisionGoal->3,MaxRecursion->20,Method->"LocalAdaptive"]
+In[63]:= cellj\[LetterSpace]dark[v_?NumericQ]:=jdb\[LetterSpace]dark[v]+emitter\[LetterSpace]current[v]+j\[LetterSpace]surf[v]
+cellj\[LetterSpace]light[v_?NumericQ]:=cellj\[LetterSpace]dark[v]+jl
+(*cellj\[LetterSpace]light\[LetterSpace]table=Parallelize[Table[{v,cellj\[LetterSpace]light[v]},{v,vmin,vmax,dv}]];
+cellj\[LetterSpace]light\[LetterSpace]interpf=Interpolation[cellj\[LetterSpace]light\[LetterSpace]table,InterpolationOrder->1];*)
+cellj\[LetterSpace]light\[LetterSpace]interp[v_?NumericQ]:=Piecewise[{
+{cellj\[LetterSpace]light\[LetterSpace]interpf[vmin],v<vmin},
+{cellj\[LetterSpace]light\[LetterSpace]interpf[vmax],v>vmax}
+},
+cellj\[LetterSpace]light\[LetterSpace]interpf[v]
+];
+In[66]:= initialize[doping_]:=Module[{},
+p\[LetterSpace]emit=doping;
+Dn=35+28*Log[p\[LetterSpace]emit/10^19];
+eu=1.0 10^-3*(12+6*p\[LetterSpace]emit/10^19);(*Linear fit to Urbach Energy vs doping*)
+eg\[LetterSpace]emit=eg-1.6 10^-8 p\[LetterSpace]emit^(1/3);(*Bandgap narrowing of the emitter*)
+efp=FindRoot[p[x]==p\[LetterSpace]emit,{x,0}][[1,2]];
+np0=nc Exp[-(eg\[LetterSpace]emit-efp)/kBT];
+Ln=1.7 10^-4 (p\[LetterSpace]emit/10^19)^-0.4;
+\[Alpha]\[LetterSpace]factor=\[Alpha]\[LetterSpace]bandgap/NIntegrate[\[Alpha]\[LetterSpace]integrand[ev,0,eg\[LetterSpace]emit],{ev,-Infinity,0}];
+\[Alpha]\[LetterSpace]table=Flatten[Parallelize[Table[{{e,\[CapitalDelta]\[Mu]},\[Alpha][e,\[CapitalDelta]\[Mu]]},{\[CapitalDelta]\[Mu],\[CapitalDelta]\[Mu]0,\[CapitalDelta]\[Mu]max,d\[CapitalDelta]\[Mu]},{e,e0,emax,de}]],1];
+\[Alpha]\[LetterSpace]interpf=Interpolation[\[Alpha]\[LetterSpace]table,InterpolationOrder->2];
+cellj\[LetterSpace]light\[LetterSpace]table=Parallelize[Table[{v,cellj\[LetterSpace]light[v]},{v,vmin,vmax,dv}]];
+cellj\[LetterSpace]light\[LetterSpace]interpf=Interpolation[cellj\[LetterSpace]light\[LetterSpace]table,InterpolationOrder->1];
+]
+(*For[val=1.0 10^19,val<=10.0 10^19,val = val+1.0 10^19,
+Print[val];
+initialize[val];
+cell\[LetterSpace]pv=calc\[LetterSpace]pv[cellj\[LetterSpace]light\[LetterSpace]interp];
+Print[cell\[LetterSpace]pv];
+Print[calc\[LetterSpace]ideality[cellj\[LetterSpace]dark,cell\[LetterSpace]pv["vmpp"]]];
+]*)
+In[93]:= initialize[6 10^19]
+In[99]:= cell\[LetterSpace]pv=calc\[LetterSpace]pv[cellj\[LetterSpace]light\[LetterSpace]interp];
+Print[cell\[LetterSpace]pv];
+Print[calc\[LetterSpace]ideality[cellj\[LetterSpace]dark,cell\[LetterSpace]pv["vmpp"]]];
+During evaluation of In[99]:= <|pmax->21.3548,vmpp->0.752,jmpp->-28.3974,eff->0.213548,jsc->30.,voc->0.877389,ff->0.811302|>
+During evaluation of In[99]:= 1.64124
+In[102]:= Plot[current\[LetterSpace]integrand[x,0.87],{x,0,1.6},PlotRange->All]
+Out[102]= 
