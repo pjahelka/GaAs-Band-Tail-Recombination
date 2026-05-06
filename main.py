@@ -4,6 +4,8 @@ from scipy.optimize import root_scalar, minimize_scalar
 from scipy.interpolate import interp1d, RectBivariateSpline
 import warnings
 import multiprocessing
+import os
+import csv
 import config as cfg
 
 # Suppress integration warnings for cleaner output
@@ -226,6 +228,52 @@ class GaAsCellCalculator:
         ff = pmax / (jsc * voc) if (jsc * voc) != 0 else np.nan
         return {"pmax": pmax, "vmpp": vmpp, "jmpp": jmpp, "eff": pmax / cfg.PSUN, "jsc": jsc, "voc": voc, "ff": ff}
 
+    def save_simulation_results(self, results_dir="results", verbose=True):
+        if not os.path.exists(results_dir):
+            os.makedirs(results_dir)
+
+        pv = self.calc_pv(self.cellj_light_interp)
+        ideality = self.calc_ideality(self.cellj_dark, pv['vmpp'])
+        pv['ideality'] = ideality
+
+        if verbose:
+            print("Photovoltaic Parameters:")
+            for k, v in pv.items(): print(f"  {k}: {v:.6f}")
+
+            # Calculate and print Efn at the surface (x=0) at Voc
+            voc = pv['voc']
+            efn_surface = self.efn(0, voc)
+            print(f"\nEfn at surface (x=0) at Voc: {efn_surface:.6f} eV")
+            print(f"Ideality Factor: {ideality:.6f}")
+
+        # File naming components
+        base_name = f"doping_{self.doping:.1e}_srv_{self.srv:.1e}_tau_{self.TAU_SRH:.1e}"
+
+        # 1. Save Headline PV results
+        pv_filename = os.path.join(results_dir, f"{base_name}_pv.csv")
+        with open(pv_filename, mode='w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(pv.keys())
+            writer.writerow(pv.values())
+        if verbose:
+            print(f"PV results saved to {pv_filename}")
+
+        # 2. Save Light and Dark IVs
+        iv_filename = os.path.join(results_dir, f"{base_name}_iv.csv")
+        v_grid = np.linspace(cfg.VMIN, cfg.VMAX, 200) # Use a reasonably dense grid for IV
+        dark_currents = [self.cellj_dark(v) for v in v_grid]
+        light_currents = [self.cellj_light_interp(v) for v in v_grid]
+
+        with open(iv_filename, mode='w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Voltage (V)", "Dark Current (mA/cm2)", "Light Current (mA/cm2)"])
+            for v, dark, light in zip(v_grid, dark_currents, light_currents):
+                writer.writerow([v, dark, light])
+        if verbose:
+            print(f"IV results saved to {iv_filename}")
+
+        return pv
+
     def initialize(self):
         print(f"Initializing parameters for doping = {self.p_emit:e}...")
         self.Dn = cfg.DN_BASE + cfg.DN_COEFF * np.log(self.p_emit / cfg.REF_DOPING)
@@ -282,14 +330,10 @@ class GaAsCellCalculator:
 
 
 if __name__ == "__main__":
-    cell = GaAsCellCalculator(doping=2e19, srv=1E0, tau_SRH=1E-10)
-    pv = cell.calc_pv(cell.cellj_light_interp)
-    print("Photovoltaic Parameters:")
-    for k, v in pv.items(): print(f"  {k}: {v:.6f}")
-    
-    # Calculate and print Efn at the surface (x=0) at Voc
-    voc = pv['voc']
-    efn_surface = cell.efn(0, voc)
-    print(f"\nEfn at surface (x=0) at Voc: {efn_surface:.6f} eV")
-    
-    print(f"Ideality Factor: {cell.calc_ideality(cell.cellj_dark, pv['vmpp']):.6f}")
+    # Simulation parameters
+    doping = 2e19
+    srv = 1E0
+    tau_SRH = 1E-10
+
+    cell = GaAsCellCalculator(doping=doping, srv=srv, tau_SRH=tau_SRH)
+    cell.save_simulation_results()
