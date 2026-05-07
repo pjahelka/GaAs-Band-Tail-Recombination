@@ -172,6 +172,6 @@ if __name__ == "__main__":
     
     # Example: Plot ideality vs voltage for a specific case
     # Let's pick a middle-of-the-road doping and SRV from the sweep
-    example_doping = 4.6e19
+    example_doping = 8.0e19
     example_srv = 1.0e7
     plot_ideality_vs_voltage(example_doping, example_srv)

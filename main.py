@@ -24,18 +24,12 @@ def be_func(e, mu, kBT):
     return 1.0 / np.where(exp_val == 1.0, 1e-10, exp_val - 1.0)
 
 
-def alpha_integrand_func(ev, d_mu, e, eu, efp, kBT):
-    if ev > 0: return 0.0
-    return np.sqrt(-ev) * np.exp((ev + e) / eu) * (fd_func(ev, efp, kBT) - fd_func(ev + e, efp + d_mu, kBT))
-
-
-def alpha_raw_worker(args):
-    e, d_mu, eg_emit, alpha_bandgap, alpha_factor, eu, efp, kBT, e_min = args
-    if e >= eg_emit:
-        return alpha_bandgap
-    # Using e_min as a safe lower limit for the Urbach tail integration
-    val, _ = quad(alpha_integrand_func, e_min, 0, args=(d_mu, e, eu, efp, kBT), epsabs=cfg.EPSABS, epsrel=cfg.EPSREL)
-    return alpha_factor * val
+def alpha_1d_worker(args):
+    diff, eu, efp, kBT, e_min = args
+    def integrand(ev):
+        return np.sqrt(-ev) * np.exp(ev / eu) * fd_func(ev + diff, efp, kBT)
+    val, _ = quad(integrand, e_min, 0, epsabs=cfg.EPSABS, epsrel=cfg.EPSREL)
+    return val
 
 
 def ecd_worker(args):
@@ -98,14 +92,6 @@ class GaAsCellCalculator:
         # Run initialization
         self.initialize()
 
-    def fd(self, e, mu):
-        val = np.clip((e - mu) / self.kBT, -700, 700)
-        return 1.0 / (np.exp(val) + 1.0)
-
-    def be(self, e, mu):
-        val = np.clip((e - mu) / self.kBT, -700, 700)
-        exp_val = np.exp(val)
-        return 1.0 / np.where(exp_val == 1.0, 1e-10, exp_val - 1.0)
 
     def _expm1_over_x(self, x):
         """Stable calculation of (exp(x)-1)/x"""
@@ -113,7 +99,7 @@ class GaAsCellCalculator:
 
     def p_func(self, efp):
         def integrand(e):
-            return np.sqrt(-e / self.kBT) * (1.0 - self.fd(e, efp)) / self.kBT
+            return np.sqrt(-e / self.kBT) * (1.0 - fd_func(e, efp, self.kBT)) / self.kBT
 
         val, _ = quad(integrand, cfg.E_MIN, 0, epsabs=cfg.EPSABS, epsrel=cfg.EPSREL)
         return cfg.NV * (2.0 / np.sqrt(np.pi)) * val
@@ -153,7 +139,7 @@ class GaAsCellCalculator:
     def alpha_integrand(self, ev, d_mu, e):
         """Alpha integrand exactly as specified in the text file."""
         if ev > 0: return 0.0
-        return np.sqrt(-ev) * np.exp((ev + e) / self.eu) * (self.fd(ev, self.efp) - self.fd(ev + e, self.efp + d_mu))
+        return np.sqrt(-ev) * np.exp((ev + e) / self.eu) * (fd_func(ev, self.efp, self.kBT) - fd_func(ev + e, self.efp + d_mu, self.kBT))
 
     def alpha_raw(self, e, d_mu):
         """Direct calculation of alpha using numerical integration."""
@@ -175,7 +161,7 @@ class GaAsCellCalculator:
 
     def jbb(self, e, d_mu):
         factor = (8 * np.pi * cfg.N_INDEX ** 2 * cfg.C) / ((cfg.H * cfg.C) ** 3)
-        return factor * (e ** 2) * self.be(e, d_mu)
+        return factor * (e ** 2) * be_func(e, d_mu, self.kBT)
 
     def current_integrand(self, e, d_mu):
         return self.alpha_interp(e, d_mu) * self.jbb(e, d_mu)
@@ -185,10 +171,11 @@ class GaAsCellCalculator:
         return self._ecd_interpf(d_mu)
 
     def emitter_current(self, v):
-        x_grid = np.linspace(0, self.We, cfg.X_GRID_POINTS)
-        dmu_vals = self.delta_mu(x_grid, v)
-        ecd_vals = self.emitter_current_density(dmu_vals)
-        return trapezoid(ecd_vals, x_grid)
+        def integrand(x):
+            dmu = self.delta_mu(x, v)
+            return self.emitter_current_density(dmu)
+        val, _ = quad(integrand, 0, self.We, epsabs=cfg.EPSABS, epsrel=cfg.EPSREL)
+        return val
 
     def cellj_dark(self, v):
         return self.jdb_dark(v) + self.emitter_current(v) + self.j_surf(v) + self.j_srh(v)
@@ -208,9 +195,7 @@ class GaAsCellCalculator:
 
     def calc_voc(self, j_func):
         try:
-            v1, v2 = 0.5 * (cfg.VMIN + cfg.VMAX), cfg.VMAX
-            if j_func(v1) * j_func(v2) > 0: v1 = 0
-            res = root_scalar(j_func, bracket=[v1, v2])
+            res = root_scalar(j_func, bracket=[cfg.VMIN, cfg.VMAX])
             return res.root
         except ValueError:
             return np.nan
@@ -291,32 +276,42 @@ class GaAsCellCalculator:
         val_init, _ = quad(lambda ev: self.alpha_integrand(ev, 0, self.eg_emit), cfg.E_MIN, 0, epsabs=cfg.EPSABS, epsrel=cfg.EPSREL)
         self.alpha_factor = cfg.ALPHA_BANDGAP / val_init
 
-        # Pre-compute alpha interpolation table
-        print("Pre-computing alpha(e, delta_mu) interpolation table...")
-        e_grid = np.linspace(cfg.E0, self.emax, int((self.emax - cfg.E0)/cfg.DE))
-        dmu_grid = np.linspace(cfg.DELTA_MU0, cfg.VMAX, int((cfg.VMAX - cfg.DELTA_MU0)/cfg.D_DELTA_MU))
-        
-        args_list = []
-        for e_val in e_grid:
-            for dmu_val in dmu_grid:
-                args_list.append((e_val, dmu_val, self.eg_emit, cfg.ALPHA_BANDGAP, self.alpha_factor, self.eu, self.efp, self.kBT, cfg.E_MIN))
-        
         with multiprocessing.Pool() as pool:
-            results = pool.map(alpha_raw_worker, args_list)
-        
-        alpha_values = np.array(results).reshape(len(e_grid), len(dmu_grid))
-        self._alpha_interpf = RectBivariateSpline(e_grid, dmu_grid, alpha_values)
+            # Pre-compute alpha interpolation table using 1D optimization
+            print("Pre-computing alpha(e, delta_mu) interpolation table...")
+            e_grid = np.linspace(cfg.E0, self.emax, int((self.emax - cfg.E0)/cfg.DE))
+            dmu_grid = np.linspace(cfg.DELTA_MU0, cfg.VMAX, int((cfg.VMAX - cfg.DELTA_MU0)/cfg.D_DELTA_MU))
+            
+            # Use a fixed 1D grid for I(diff) to avoid floating point issues and redundant calculations
+            # diff ranges from e_min - dmu_max to e_max - dmu_min
+            diff_min = cfg.E0 - cfg.VMAX
+            diff_max = self.emax - cfg.DELTA_MU0
+            diff_grid = np.arange(diff_min - 0.01, diff_max + 0.01, 0.001)
+            
+            args_list_1d = [(d, self.eu, self.efp, self.kBT, cfg.E_MIN) for d in diff_grid]
+            results_1d = pool.map(alpha_1d_worker, args_list_1d)
+            
+            i1d_interp = interp1d(diff_grid, results_1d, kind='cubic')
+            
+            # Map back to 2D using the identity: alpha = alpha_factor * exp(e/eu) * (I0 - I(e-dmu))
+            E_mesh = e_grid[:, None]
+            D_mesh = dmu_grid[None, :]
+            I_diffs = i1d_interp(E_mesh - D_mesh)
+            I0 = i1d_interp(0.0)
 
-        # Pre-compute Emitter Current Density interpolation table
-        print("Pre-computing emitter current density table...")
-        # ECD depends only on delta_mu
-        dmu_ecd_grid = np.linspace(cfg.VMIN - cfg.VMIN_OFFSET, self.emax, cfg.DMU_ECD_GRID_POINTS)
-        
-        args_list_ecd = []
-        for dmu in dmu_ecd_grid:
-            args_list_ecd.append((dmu, self.emax, self.eg_emit, cfg.Q, self._alpha_interpf, cfg.N_INDEX, cfg.C, cfg.H, self.kBT, cfg.ALPHA_BANDGAP))
-        
-        with multiprocessing.Pool() as pool:
+            alpha_values = self.alpha_factor * np.exp(E_mesh / self.eu) * (I0 - I_diffs)
+            alpha_values[e_grid >= self.eg_emit, :] = cfg.ALPHA_BANDGAP
+            
+            self._alpha_interpf = RectBivariateSpline(e_grid, dmu_grid, alpha_values)
+
+            # Pre-compute Emitter Current Density interpolation table
+            print("Pre-computing emitter current density table...")
+            dmu_ecd_grid = np.linspace(cfg.VMIN - cfg.VMIN_OFFSET, self.emax, cfg.DMU_ECD_GRID_POINTS)
+            
+            args_list_ecd = []
+            for dmu in dmu_ecd_grid:
+                args_list_ecd.append((dmu, self.emax, self.eg_emit, cfg.Q, self._alpha_interpf, cfg.N_INDEX, cfg.C, cfg.H, self.kBT, cfg.ALPHA_BANDGAP))
+            
             ecd_values = pool.map(ecd_worker, args_list_ecd)
             
         self._ecd_interpf = interp1d(dmu_ecd_grid, ecd_values, kind='cubic', bounds_error=False, fill_value="extrapolate")
@@ -331,9 +326,9 @@ class GaAsCellCalculator:
 
 if __name__ == "__main__":
     # Simulation parameters
-    doping = 2e19
+    doping = 1e19
     srv = 1E0
-    tau_SRH = 1E-10
+    tau_SRH = 1E-1
 
     cell = GaAsCellCalculator(doping=doping, srv=srv, tau_SRH=tau_SRH)
     cell.save_simulation_results()
