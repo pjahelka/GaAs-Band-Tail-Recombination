@@ -35,8 +35,10 @@ def main():
     tau_end = 100e-6
     tau_points = 7
 
-    doping_grid = np.linspace(doping_start, doping_end, doping_points)
-    srv_grid = np.logspace(np.log10(srv_start), np.log10(srv_end), srv_points)
+    #doping_grid = np.linspace(doping_start, doping_end, doping_points)
+    doping_grid = [5E19]
+    #srv_grid = np.logspace(np.log10(srv_start), np.log10(srv_end), srv_points)
+    srv_grid = [1E8, 1E100]
     tau_grid = np.logspace(np.log10(tau_start), np.log10(tau_end), tau_points)
 
     sweep_params = []
@@ -63,7 +65,7 @@ def main():
         return
 
     # Create results folder
-    results_dir = "results"
+    results_dir = cfg.RESULTS_DIR
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)
 

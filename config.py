@@ -34,6 +34,8 @@ DOPING_DEFAULT = 6e19  # p-type doping, cm^-3
 SRV_DEFAULT = 1E7      # Surface recombination velocity, cm/s
 
 # Simulation Parameters
+RESULTS_DIR = "results"
+PLOTS_DIR = "plots"
 DV = 0.005             # Voltage step for grid, V
 VMAX = 1.2             # Maximum voltage, V
 VMIN = -0.1            # Minimum voltage, V

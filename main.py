@@ -126,7 +126,7 @@ class GaAsCellCalculator:
         return numerator / denominator
 
     def j_srh(self, v):
-        return cfg.Q * cfg.NI * (np.exp(v / (2 * self.kBT)) - 1) * self.Wd * np.sqrt(1 - v / cfg.VBI) / (2 * self.TAU_SRH)
+        return cfg.Q * cfg.NI * (np.exp(v / (2 * self.kBT)) - 1) * self.Wd *np.sqrt(1-v/cfg.VBI) / (2 * self.TAU_SRH)
 
     def delta_mu(self, x, v):
         return self.efn(x, v) - self.efp
@@ -213,7 +213,10 @@ class GaAsCellCalculator:
         ff = pmax / (jsc * voc) if (jsc * voc) != 0 else np.nan
         return {"pmax": pmax, "vmpp": vmpp, "jmpp": jmpp, "eff": pmax / cfg.PSUN, "jsc": jsc, "voc": voc, "ff": ff}
 
-    def save_simulation_results(self, results_dir="results", verbose=True):
+    def save_simulation_results(self, results_dir=None, verbose=True):
+        if results_dir is None:
+            results_dir = cfg.RESULTS_DIR
+            
         if not os.path.exists(results_dir):
             os.makedirs(results_dir)
 
